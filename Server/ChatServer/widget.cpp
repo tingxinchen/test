@@ -119,7 +119,9 @@ void Widget::onReadyRead() {
             logEdit->append(QString("[群聊] %1: %2").arg(senderName).arg(obj["content"].toString()));
             // 對所有人進行廣播
             for (QTcpSocket *s : clientList.values()) {
-                s->write(data);
+                if (s != socket) {   //避免傳給自己
+                    s->write(data);
+                }
             }
         }
         // 私訊
