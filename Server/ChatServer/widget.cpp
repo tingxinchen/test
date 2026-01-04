@@ -12,15 +12,13 @@ Widget::Widget(QWidget *parent)
     this->setWindowTitle("TCP 通訊伺服器");
     this->resize(450, 350);
 
-    setupUI(); // ui佈局
+    setupUI(); // 初始化介面
 
     tcpServer = new QTcpServer(this);
 
-    // 連結啟動與關閉按鈕
+    // 連結按鈕與連線訊號
     connect(startBtn, &QPushButton::clicked, this, &Widget::startServer);
     connect(stopBtn, &QPushButton::clicked, this, &Widget::stopServer);
-
-    // 處理連線訊號
     connect(tcpServer, &QTcpServer::newConnection, this, &Widget::onNewConnection);
 }
 
@@ -36,7 +34,7 @@ void Widget::setupUI() {
     portEdit = new QLineEdit("8888");
     startBtn = new QPushButton("啟動伺服器");
     stopBtn = new QPushButton("關閉伺服器");
-    stopBtn->setEnabled(false); //停用
+    stopBtn->setEnabled(false);
 
     logEdit = new QTextEdit();
     logEdit->setReadOnly(true);
@@ -53,35 +51,31 @@ void Widget::setupUI() {
     mainLayout->addWidget(logEdit);
 }
 
-//啟動伺服器
+// --- 啟動伺服器 ---
 void Widget::startServer() {
     QString ip = ipEdit->text();
     quint16 port = portEdit->text().toUShort();
 
     if (tcpServer->listen(QHostAddress(ip), port)) {
-        logEdit->append(QString("伺服器成功啟動於 %1:%2").arg(ip).arg(port));
+        logEdit->append(QString("伺服器啟動於 %1:%2").arg(ip).arg(port));
         startBtn->setEnabled(false);
         stopBtn->setEnabled(true);
         ipEdit->setReadOnly(true);
         portEdit->setReadOnly(true);
     } else {
-        logEdit->append("錯誤: 無法啟動伺服器，請檢查 IP/Port。");
+        logEdit->append("錯誤: 無法啟動伺服器。");
     }
 }
 
-//關閉伺服器
+// --- 關閉伺服器 ---
 void Widget::stopServer() {
-    // 中斷所有連線
     for (QTcpSocket *socket : clientList.values()) {
         socket->disconnectFromHost();
         socket->close();
     }
     clientList.clear();
-
-    // 2. 停止監聽
     tcpServer->close();
 
-    // 3.恢復介面狀態
     logEdit->append("伺服器已關閉。");
     startBtn->setEnabled(true);
     stopBtn->setEnabled(false);
@@ -89,18 +83,15 @@ void Widget::stopServer() {
     portEdit->setReadOnly(false);
 }
 
-//處理新連線
+// --- 新連線 ---
 void Widget::onNewConnection() {
     QTcpSocket *clientSocket = tcpServer->nextPendingConnection();
-
-    // 連結訊號
     connect(clientSocket, &QTcpSocket::readyRead, this, &Widget::onReadyRead);
     connect(clientSocket, &QTcpSocket::disconnected, this, &Widget::onDisconnected);
-
-    logEdit->append("新連線已進入，等待登入訊息...");
+    logEdit->append("新連線進入，等待登入...");
 }
 
-// 接收與轉發訊息
+// ---接收與分發訊息 ---
 void Widget::onReadyRead() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (!socket) return;
@@ -111,26 +102,35 @@ void Widget::onReadyRead() {
 
     QString type = obj["type"].toString();
 
-    // 處理登入
+    // 1. 登入
     if (type == "login") {
         QString nickname = obj["nickname"].toString();
         clientList[nickname] = socket;
         logEdit->append(QString("使用者登入: %1").arg(nickname));
-        updateUserList(); // 廣播最新名單
+        updateUserList();
     }
-    // 處理聊天與檔案轉發
+    // 2. 聊天與檔案轉發
     else if (type == "chat") {
         QString target = obj["target"].toString();
         QString senderName = obj["sender"].toString();
 
-        if (clientList.contains(target)) {
-            clientList[target]->write(data); // 一對一轉發 JSON 封包
-            logEdit->append(QString("訊息轉發: %1 -> %2").arg(senderName).arg(target));
+        // 群聊
+        if (target == "群體聊天") {
+            logEdit->append(QString("[群聊] %1: %2").arg(senderName).arg(obj["content"].toString()));
+            // 對所有人進行廣播
+            for (QTcpSocket *s : clientList.values()) {
+                s->write(data);
+            }
+        }
+        // 私訊
+        else if (clientList.contains(target)) {
+            clientList[target]->write(data);
+            logEdit->append(QString("[私訊] %1 -> %2").arg(senderName).arg(target));
         }
     }
 }
 
-// 斷線
+// --- 斷線 ---
 void Widget::onDisconnected() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (socket) {
@@ -138,13 +138,13 @@ void Widget::onDisconnected() {
         if (!nickname.isEmpty()) {
             clientList.remove(nickname);
             logEdit->append(QString("使用者離開: %1").arg(nickname));
-            updateUserList(); // 通知其他人
+            updateUserList();
         }
         socket->deleteLater();
     }
 }
 
-//好友名單
+// ---在線名單 ---
 void Widget::updateUserList() {
     QJsonObject res;
     res["type"] = "userlist";
